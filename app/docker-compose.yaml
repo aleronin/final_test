@@ -5,6 +5,6 @@ services:
   application:
     container_name: picture-flask-app
     build: .
-    image: picture-app:1.0
+    image: aleronin96/picture_test:1.1
     ports:
       - "5000:5000"
