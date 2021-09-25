@@ -1,0 +1,296 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template creates a stack for the final test in EPAM.
+
+Parameters:
+
+  VPCname:
+    Type: String
+    Default: "eronin-final-test-VPC"
+    Description: Name of the current VPC.
+
+  InstanceTypeParameter:
+    Type: String
+    Default: "t2.micro"
+    Description: EC2 instance type.
+
+  KeyPair:
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    Description: Name of an existing EC2 KeyPair.
+
+  S3Bucketname:
+    Type: String
+    Default: "s3-bucket-final-test-eronin"
+    Description: Name of the current Bucket.
+
+Mappings:
+
+  Subnets:
+    VPC:
+      CIDR: "10.0.0.0/16"
+    Public1:
+      CIDR: "10.0.0.0/18"
+
+Resources:
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:
+        Fn::FindInMap: [ "Subnets", "VPC", "CIDR" ]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: "Network"
+          Value: "Public"
+        - Key: "Name"
+          Value: !Ref "VPCname"
+
+  InternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - ''
+            - - !Ref "VPCname"
+              - '-InternetGateway'
+
+  VPCGatewayAttachment:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      VpcId:
+        Ref: "VPC"
+      InternetGatewayId:
+        Ref: "InternetGateway"
+
+  PublicSubnet1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId:
+        Ref: "VPC"
+      CidrBlock:
+        Fn::FindInMap: [ "Subnets", "Public1", "CIDR" ]
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - ''
+            - - !Ref "VPCname"
+              - '-subnet-a'
+
+  PublicRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId:
+        Ref: "VPC"
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - ''
+            - - !Ref "VPCname"
+              - '-public-route'
+
+  InternetGatewayRoute:
+    Type: "AWS::EC2::Route"
+    DependsOn: "VPCGatewayAttachment"
+    Properties:
+      RouteTableId:
+        Ref: "PublicRouteTable"
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId:
+        Ref: "InternetGateway"
+
+  PublicSubnet1RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId:
+        Ref: "PublicSubnet1"
+      RouteTableId:
+        Ref: "PublicRouteTable"
+
+  SecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Allows ssh connections from any IP
+      VpcId:
+         Ref: "VPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  EC2Instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: "ami-018c1c51c7a13e363"
+      InstanceType:
+        Ref: InstanceTypeParameter
+      KeyName:
+        Ref: "KeyPair"
+      SubnetId:
+        Ref: "PublicSubnet1"
+      SecurityGroupIds: [ !Ref "SecurityGroup" ]
+      IamInstanceProfile: !Ref InstanceProfile
+      Tags:
+        - Key: Name
+          Value: EC2InstanceForFinalTest
+
+  InstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      InstanceProfileName: eronin-ec2-instance-profile
+      Path: /
+      Roles:
+       - Ref: "Ec2InstanceRole"
+
+  Ec2InstanceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: eronin-ec2-instance-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: /
+
+  InstanceS3Policy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: EroninS3Policy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: "s3:*"
+            Resource: "*"
+      Roles:
+        - Ref: "Ec2InstanceRole"
+
+  S3Bucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName:
+        Ref: "S3Bucketname"
+
+  DeployAppLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: "ami-018c1c51c7a13e363"
+      InstanceType:
+        Ref: "InstanceTypeParameter"
+      KeyName:
+        Ref: "KeyPair"
+      SecurityGroups:
+        Ref: "SecurityGroup"
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash -xe
+            git clone https://github.com/aleronin/final_test my_test_1
+
+  DeployAppASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        Ref: PublicSubnet1
+      DesiredCapacity: 1
+      LaunchConfigurationName:
+        Ref: DeployAppLaunchConfig
+      MaxSize: 2
+      MinSize: 1
+      Tags:
+          - Key: Name
+            Value: AutoScalingEC2Instance
+            PropagateAtLaunch: True
+    UpdatePolicy:
+      AutoScalingReplacingUpdate:
+        WillReplace: True
+
+  ALBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId:
+        Ref: VPC
+      GroupDescription: Enable HTTP/HTTPS access
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: 'tcp'
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: FinalTestLoadBalancerSG
+
+  AppALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      Scheme: internet-facing
+      SecurityGroups:
+        Ref: ALBSecurityGroup
+      Subnets:
+        Ref: PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: FinalTestLoadBalancer
+      Type: application
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: AppTargetGroup
+      LoadBalancerArn:
+        Ref: AppALB
+      Port: '80'
+      Protocol: HTTP
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: '80'
+      Protocol: 'HTTP'
+      VpcId:
+        Ref: VPC
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /
+      HealthCheckPort: 80
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Tags:
+        - Key: Name
+          Value: ApplicationTargetGroup
+
+Outputs:
+
+  VPCId:
+    Description: "VPCId of VPC"
+    Value:
+      Ref: "VPC"
+    Export:
+      Name: !Sub "${AWS::Region}-${AWS::StackName}-VPC"
+
+  PublicSubnet1Id:
+    Description: "SubnetId of public subnet 1"
+    Value:
+      Ref: "PublicSubnet1"
+    Export:
+      Name: !Sub "${AWS::Region}-${AWS::StackName}-PublicSubnet1"
