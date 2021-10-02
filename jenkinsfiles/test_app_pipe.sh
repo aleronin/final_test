@@ -19,5 +19,3 @@ docker build -t aleronin96/picture_test:1.1 .
 
 ## push new-created image to DockerHub
 docker push aleronin96/picture_test:1.1
-
-docker-compose up -d

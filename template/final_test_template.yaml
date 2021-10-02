@@ -29,6 +29,10 @@ Mappings:
       CIDR: "10.0.0.0/16"
     Public1:
       CIDR: "10.0.0.0/18"
+    Public2:
+      CIDR: "10.0.64.0/18"
+    Public3:
+      CIDR: "10.0.192.0/18"
 
 Resources:
 
@@ -81,6 +85,42 @@ Resources:
             - - !Ref "VPCname"
               - '-subnet-a'
 
+  PublicSubnet2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId:
+        Ref: "VPC"
+      CidrBlock:
+        Fn::FindInMap: [ "Subnets", "Public2", "CIDR" ]
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - ''
+            - - !Ref "VPCname"
+              - '-subnet-b'
+
+  PublicSubnet3:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId:
+        Ref: "VPC"
+      CidrBlock:
+        Fn::FindInMap: [ "Subnets", "Public3", "CIDR" ]
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 2
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - ''
+            - - !Ref "VPCname"
+              - '-subnet-c'
+
   PublicRouteTable:
     Type: "AWS::EC2::RouteTable"
     Properties:
@@ -111,6 +151,22 @@ Resources:
       RouteTableId:
         Ref: "PublicRouteTable"
 
+  PublicSubnet2RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId:
+        Ref: "PublicSubnet2"
+      RouteTableId:
+        Ref: "PublicRouteTable"
+
+  PublicSubnet3RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId:
+        Ref: "PublicSubnet3"
+      RouteTableId:
+        Ref: "PublicRouteTable"
+
   SecurityGroup:
     Type: "AWS::EC2::SecurityGroup"
     Properties:
@@ -122,25 +178,17 @@ Resources:
           FromPort: 22
           ToPort: 22
           CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
-
-  EC2Instance:
-    Type: "AWS::EC2::Instance"
-    Properties:
-      ImageId: "ami-018c1c51c7a13e363"
-      InstanceType:
-        Ref: InstanceTypeParameter
-      KeyName:
-        Ref: "KeyPair"
-      SubnetId:
-        Ref: "PublicSubnet1"
-      SecurityGroupIds: [ !Ref "SecurityGroup" ]
-      IamInstanceProfile: !Ref InstanceProfile
-      Tags:
-        - Key: Name
-          Value: EC2InstanceForFinalTest
 
   InstanceProfile:
     Type: "AWS::IAM::InstanceProfile"
@@ -186,29 +234,55 @@ Resources:
   DeployAppLaunchConfig:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      ImageId: "ami-018c1c51c7a13e363"
+      ImageId: "ami-07df274a488ca9195"
       InstanceType:
         Ref: "InstanceTypeParameter"
       KeyName:
         Ref: "KeyPair"
-      SecurityGroups:
-        Ref: "SecurityGroup"
+      SecurityGroups: [ !Ref "SecurityGroup" ]
+      IamInstanceProfile: !Ref InstanceProfile
       UserData:
         Fn::Base64:
           Fn::Sub: |
             #!/bin/bash -xe
-            git clone https://github.com/aleronin/final_test my_test_1
+            sudo yum install git -y
+            yum update -y
+            amazon-linux-extras install docker
+            service docker start
+            usermod -a -G docker ec2-user
+            chkconfig docker on
+            sudo yum update -y
+            yum install httpd -y
+            cd /var/www/html
+            touch index.html
+            cat > index.html << EOF
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <title>New Page</title>
+              </head>
+              <body>
+                <h1>Hello, World!</h1>
+              </body>
+            </html>
+
+            EOF
+
+            sudo service httpd start
 
   DeployAppASG:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier:
-        Ref: PublicSubnet1
-      DesiredCapacity: 1
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+        - !Ref PublicSubnet3
+      DesiredCapacity: 2
       LaunchConfigurationName:
         Ref: DeployAppLaunchConfig
-      MaxSize: 2
-      MinSize: 1
+      MaxSize: 3
+      MinSize: 2
+      TargetGroupARNs: [ !Ref "AppTargetGroup" ]
       Tags:
           - Key: Name
             Value: AutoScalingEC2Instance
@@ -217,34 +291,16 @@ Resources:
       AutoScalingReplacingUpdate:
         WillReplace: True
 
-  ALBSecurityGroup:
-    Type: 'AWS::EC2::SecurityGroup'
-    Properties:
-      VpcId:
-        Ref: VPC
-      GroupDescription: Enable HTTP/HTTPS access
-      SecurityGroupIngress:
-        - IpProtocol: 'tcp'
-          FromPort: '80'
-          ToPort: '80'
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: 'tcp'
-          FromPort: '443'
-          ToPort: '443'
-          CidrIp: 0.0.0.0/0
-      Tags:
-        - Key: Name
-          Value: FinalTestLoadBalancerSG
-
   AppALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       IpAddressType: ipv4
       Scheme: internet-facing
-      SecurityGroups:
-        Ref: ALBSecurityGroup
+      SecurityGroups: [ !Ref "SecurityGroup" ]
       Subnets:
-        Ref: PublicSubnet1
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+        - !Ref PublicSubnet3
       Tags:
         - Key: Name
           Value: FinalTestLoadBalancer
@@ -259,14 +315,14 @@ Resources:
             Ref: AppTargetGroup
       LoadBalancerArn:
         Ref: AppALB
-      Port: '80'
+      Port: 80
       Protocol: HTTP
 
   AppTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Port: '80'
-      Protocol: 'HTTP'
+      Port: 80
+      Protocol: HTTP
       VpcId:
         Ref: VPC
       HealthCheckIntervalSeconds: 30
