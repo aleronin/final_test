@@ -252,9 +252,9 @@ Resources:
             service docker start
             usermod -a -G docker ec2-user
             chkconfig docker on
-            git clone https://github.com/aleronin/final_test api/
-            cd api/small-co-api/
-            docker build -t aleronin96/small-co-api:1.2
+            git clone https://github.com/aleronin/final_test /home/ec2-user/api/
+            cd /home/ec2-user/api/small-co-api/
+            docker build -t aleronin96/small-co-api:1.2 .
 
   DeployAppASG:
     Type: AWS::AutoScaling::AutoScalingGroup
