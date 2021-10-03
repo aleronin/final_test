@@ -245,30 +245,16 @@ Resources:
         Fn::Base64:
           Fn::Sub: |
             #!/bin/bash -xe
+            sudo yum update -y
             sudo yum install git -y
-            yum update -y
+            sudo yum update -y
             amazon-linux-extras install docker
             service docker start
             usermod -a -G docker ec2-user
             chkconfig docker on
-            sudo yum update -y
-            yum install httpd -y
-            cd /var/www/html
-            touch index.html
-            cat > index.html << EOF
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <title>New Page</title>
-              </head>
-              <body>
-                <h1>Hello, World!</h1>
-              </body>
-            </html>
-
-            EOF
-
-            sudo service httpd start
+            git clone https://github.com/aleronin/final_test api/
+            cd api/small-co-api/
+            docker build -t aleronin96/small-co-api:1.2
 
   DeployAppASG:
     Type: AWS::AutoScaling::AutoScalingGroup
